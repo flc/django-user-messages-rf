@@ -9,11 +9,21 @@ from rest_framework.response import Response
 from rest_framework.status import HTTP_400_BAD_REQUEST
 from rest_framework import exceptions
 from rest_framework import status
+from rest_framework import filters
 
 from user_messages.models import Thread, Message
 
 from .serializers import ThreadSerializer, CreateThreadSerializer, MessageSerializer
 from .permissions import ThreadPermission
+
+
+class LatestMessageAtFilterBackend(filters.BaseFilterBackend):
+
+    def filter_queryset(self, request, queryset, view):
+        params = request.QUERY_PARAMS
+        if 'latest_message_at__lt' in params:
+            return queryset.filter(latest_message_at__lt=params['latest_message_at__lt'])
+        return queryset
 
 
 class ThreadViewSet(
@@ -25,6 +35,8 @@ class ThreadViewSet(
     queryset = Thread.objects.all()
     serializer_class = ThreadSerializer
     permission_classes = (IsAuthenticated,)
+    filter_backends = (filters.DjangoFilterBackend, LatestMessageAtFilterBackend)
+    # paginate_by = 100
 
     def get_serializer_class(self):
         if self.request.method == "POST":
@@ -33,7 +45,15 @@ class ThreadViewSet(
 
     def get_queryset(self):
         user = self.request.user
-        return self.queryset.filter(users__id=user.id)
+        qs = self.queryset.filter(users__id=user.id)
+        if self.request.method == "GET":
+            try:
+                qs = qs.prefetch_related("users__profile")
+            except AttributeError:
+                # in case of there is no profile relation
+                qs = qs.prefetch_related("users")
+            qs = qs.order_by("-latest_message_at")
+        return qs
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.DATA, files=request.FILES)
